@@ -51,13 +51,11 @@ class MultiWozDB(object):
 
     def addDBPointer(self, domain, match_num, return_num=False):
         """Create database pointer for all related domains."""
-        # if turn_domains is None:
-        #     turn_domains = db_domains
-        if domain in db_domains:
-            vector = self.oneHotVector(domain, match_num)
-        else:
-            vector = [0, 0, 0 ,0]
-        return vector
+        return (
+            self.oneHotVector(domain, match_num)
+            if domain in db_domains
+            else [0, 0, 0, 0]
+        )
 
     def get_match_num(self, constraints, return_entry=False):
         """Create database pointer for all related domains."""
@@ -72,9 +70,7 @@ class MultiWozDB(object):
                 match[domain] = len(matched_ents)
                 if return_entry :
                     entry[domain] = matched_ents
-        if return_entry:
-            return entry
-        return match
+        return entry if return_entry else match
 
 
     def pointerBack(self, vector, domain):
@@ -100,7 +96,7 @@ class MultiWozDB(object):
             report = ''
         else:
             num = vector.index(1)
-            report = domain+': '+nummap[num] + '; '
+            report = f'{domain}: {nummap[num]}; '
 
         if vector[-2] == 0 and vector[-1] == 1:
             report += 'booking: ok'
@@ -123,17 +119,13 @@ class MultiWozDB(object):
         if domain == 'police':
             return self.dbs['police']
         if domain == 'hospital':
-            if constraints.get('department'):
-                for entry in self.dbs['hospital']:
-                    if entry.get('department') == constraints.get('department'):
-                        return [entry]
-            else:
+            if not constraints.get('department'):
                 return []
 
-        valid_cons = False
-        for v in constraints.values():
-            if v not in ["not mentioned", ""]:
-                valid_cons = True
+            for entry in self.dbs['hospital']:
+                if entry.get('department') == constraints.get('department'):
+                    return [entry]
+        valid_cons = any(v not in ["not mentioned", ""] for v in constraints.values())
         if not valid_cons:
             return []
 
@@ -146,7 +138,7 @@ class MultiWozDB(object):
                     cons = constraints['name']
                     dbn = db_ent['name']
                     if cons == dbn:
-                        db_ent = db_ent if not return_name else db_ent['name']
+                        db_ent = db_ent['name'] if return_name else db_ent
                         match_result.append(db_ent)
                         return match_result
 
@@ -156,7 +148,7 @@ class MultiWozDB(object):
                 if s == 'name':
                     continue
                 if s in ['people', 'stay'] or(domain == 'hotel' and s == 'day') or \
-                (domain == 'restaurant' and s in ['day', 'time']):
+                    (domain == 'restaurant' and s in ['day', 'time']):
                     continue
 
                 skip_case = {"don't care":1, "do n't care":1, "dont care":1, "not mentioned":1, "dontcare":1, "":1, "do not care":1,}
@@ -186,25 +178,18 @@ class MultiWozDB(object):
                     if s == 'leave' and v>time:
                         #print(f"{v}<{time}")
                         match = False
-                else:
-                    if exactly_match and v != db_ent[s]:
-                        match = False
-                        break
-                    elif v not in db_ent[s]:
-                        match = False
-                        break
-
+                elif exactly_match and v != db_ent[s] or v not in db_ent[s]:
+                    match = False
+                    break
             if match:
                 match_result.append(db_ent)
 
-        if not return_name:
-            return match_result
-        else:
+        if return_name:
             if domain == 'train':
                 match_result = [e['id'] for e in match_result]
             else:
                 match_result = [e['name'] for e in match_result]
-            return match_result
+        return match_result
 
 
     def querySQL(self, domain, constraints):

@@ -133,11 +133,9 @@ class Vocab(object):
         l = self.tokenizer.decode(index_list)
         l = l.split()
         if not eos or eos not in l:
-            text = ' '.join(l)
-        else:
-            idx = l.index(eos)
-            text = ' '.join(l[:idx])
-        return text
+            return ' '.join(l)
+        idx = l.index(eos)
+        return ' '.join(l[:idx])
 
 class MultiWozReader(_ReaderBase):
     def __init__(self, vocab=None, args=None):
@@ -181,16 +179,15 @@ class MultiWozReader(_ReaderBase):
         dial_context = []
         delete_op = self.vocab.tokenizer.encode("<None>") #[32157]
         prev_constraint_dict = {}
-        for idx, t in enumerate(dial['log']):
-            enc = {}
-            enc['dial_id'] = fn
+        for t in dial['log']:
+            enc = {'dial_id': fn}
             dial_context.append( self.vocab.tokenizer.encode(t['user']) + self.vocab.tokenizer.encode('<eos_u>') )
             enc['resp_nodelex'] = self.vocab.tokenizer.encode(t['resp_nodelex']) + self.vocab.tokenizer.encode('<eos_r>')
             enc['user'] = list(chain(*dial_context[-self.args.context_window:])) # here we use user to represent dialogue history
             enc['bspn'] = self.vocab.tokenizer.encode(t['constraint']) + self.vocab.tokenizer.encode('<eos_b>')
             constraint_dict = self.bspan_to_constraint_dict(t['constraint'])
             update_bspn = self.check_update(prev_constraint_dict, constraint_dict)
-            enc['update_bspn'] = self.vocab.tokenizer.encode(update_bspn)            
+            enc['update_bspn'] = self.vocab.tokenizer.encode(update_bspn)
             encoded_dial.append(enc)
 
             prev_constraint_dict = constraint_dict
@@ -215,23 +212,19 @@ class MultiWozReader(_ReaderBase):
                         update_dict[domain][slot] = "<None>"
             else:
                 update_dict[domain] = deepcopy(constraint_dict[domain])
-    
 
-        update_bspn= self.constraint_dict_to_bspan(update_dict)
-        return update_bspn
+
+        return self.constraint_dict_to_bspan(update_dict)
 
     def constraint_dict_to_bspan(self, constraint_dict):
         if not constraint_dict:
             return "<eos_b>"
         update_bspn=""
         for domain in constraint_dict:
-            if len(update_bspn)==0: 
-                update_bspn += f"[{domain}]"
-            else:
-                update_bspn += f" [{domain}]"
+            update_bspn += f"[{domain}]" if len(update_bspn)==0 else f" [{domain}]"
             for slot in constraint_dict[domain]:
                 update_bspn += f" {slot} {constraint_dict[domain][slot]}"
-        update_bspn += f" <eos_b>"
+        update_bspn += " <eos_b>"
         return update_bspn
 
     def bspan_to_constraint_dict(self, bspan, bspn_mode = 'bspn'):
@@ -303,19 +296,19 @@ class MultiWozReader(_ReaderBase):
         input: previous dialogue state + dialogue history
         output1: dialogue state update ['update_bspn'] or current dialogue state ['bspn']
         """
-        inputs = {}
         pad_token = self.vocab.tokenizer.encode("<pad>")[0]
         batch_size = len(batch['user'])
         # input: previous dialogue state + dialogue history
         input_ids = []
         if first_turn:
-            for i in range(batch_size):
-                input_ids.append(self.vocab.tokenizer.encode('<eos_b>') + batch['user'][i])
+            input_ids.extend(
+                self.vocab.tokenizer.encode('<eos_b>') + batch['user'][i]
+                for i in range(batch_size)
+            )
         else:
-            for i in range(batch_size):
-                input_ids.append(prev['bspn'][i] + batch['user'][i])
+            input_ids.extend(prev['bspn'][i] + batch['user'][i] for i in range(batch_size))
         input_ids, masks = self.padInput(input_ids, pad_token)
-        inputs["input_ids"] = torch.tensor(input_ids,dtype=torch.long)
+        inputs = {"input_ids": torch.tensor(input_ids, dtype=torch.long)}
         inputs["masks"] = torch.tensor(masks,dtype=torch.long)
         if self.args.noupdate_dst:
             # here we use state_update denote the belief span (bspn)...
@@ -333,7 +326,7 @@ class MultiWozReader(_ReaderBase):
         #         print(inputs[k].tolist())
         #         print(k)
         #         print(self.vocab.tokenizer.decode(inputs[k].tolist()[0]))
-        
+
         return inputs
 
     def padOutput(self, sequences, pad_token):
@@ -366,7 +359,7 @@ class MultiWozReader(_ReaderBase):
         if not constraint_dict_update:
             return prev_bspn
         constraint_dict = self.bspan_to_constraint_dict(self.vocab.tokenizer.decode(prev_bspn) )
-        
+
         for domain in constraint_dict_update:
             if domain not in constraint_dict:
                 constraint_dict[domain] = {}
@@ -375,13 +368,14 @@ class MultiWozReader(_ReaderBase):
                     _ = constraint_dict[domain].pop(slot, None)
                 else:
                     constraint_dict[domain][slot]=value
-        updated_bspn = self.vocab.tokenizer.encode(self.constraint_dict_to_bspan(constraint_dict))
-        return updated_bspn
+        return self.vocab.tokenizer.encode(
+            self.constraint_dict_to_bspan(constraint_dict)
+        )
 
     def wrap_result(self, result_dict, eos_syntax=None):
         decode_fn = self.vocab.sentence_decode
         results = []
-        eos_syntax = ontology.eos_tokens if not eos_syntax else eos_syntax
+        eos_syntax = eos_syntax or ontology.eos_tokens
 
         field = ['dial_id', 'turn_num', 'user', 'bspn_gen','bspn']
 

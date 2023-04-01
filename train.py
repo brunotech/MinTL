@@ -45,7 +45,7 @@ class Model(object):
         step = 0
         prev_min_loss = 1000
         print(f"vocab_size:{self.model.config.vocab_size}")
-        torch.save(self.args, self.args.model_path + '/model_training_args.bin')
+        torch.save(self.args, f'{self.args.model_path}/model_training_args.bin')
         self.tokenizer.save_pretrained(self.args.model_path)
         self.model.config.to_json_file(os.path.join(self.args.model_path, CONFIG_NAME))
         self.model.train()
@@ -53,6 +53,7 @@ class Model(object):
         lr_lambda = lambda epoch: self.args.lr_decay ** epoch
         scheduler = torch.optim.lr_scheduler.LambdaLR(self.optim, lr_lambda=lr_lambda)
 
+        do_test = False
         for epoch in range(cfg.epoch_num):
             log_loss = 0
             log_dst = 0
@@ -71,7 +72,7 @@ class Model(object):
 
                     #     print(k)
                     #     print(inputs[k])
- 
+
                     # batch_size = inputs["input_ids"].shape[0]
                     # input_seq_len = inputs["input_ids"].shape[1]
                     # dst_seq_len = inputs["state_input"].shape[1]
@@ -84,7 +85,7 @@ class Model(object):
                                         )
                     dst_loss = outputs[0]
 
-            
+
                     # outputs = self.model(input_ids=inputs["input_ids"],
                     #                     attention_mask=inputs["masks"],
                     #                     decoder_input_ids=inputs["response_input"],
@@ -123,7 +124,6 @@ class Model(object):
                                                                            time.time()-btm,
                                                                            turn_num+1))
             epoch_sup_loss = log_loss/(log_cnt+ 1e-8)
-            do_test = False
             valid_loss = self.validate(do_test=do_test)
             logging.info('epoch: %d, train loss: %.3f, valid loss: %.3f, total time: %.1fmin' % (epoch+1, epoch_sup_loss,
                     valid_loss, (time.time()-sw)/60))
@@ -145,22 +145,28 @@ class Model(object):
                 if not early_stop_count:
                     self.load_model()
                     print('result preview...')
-                    file_handler = logging.FileHandler(os.path.join(self.args.model_path, 'eval_log%s.json'%cfg.seed))
+                    file_handler = logging.FileHandler(
+                        os.path.join(
+                            self.args.model_path, f'eval_log{cfg.seed}.json'
+                        )
+                    )
                     logging.getLogger('').addHandler(file_handler)
                     logging.info(str(cfg))
                     self.eval()
                     return
-                # if not weight_decay_count:
-                #     self.optim = AdamW(model.parameters(), lr=args.lr)
-                #     lr *= cfg.lr_decay
-                #     self.optim = Adam(lr=lr, params=filter(lambda x: x.requires_grad, self.m.parameters()),
-                #                   weight_decay=5e-5)
-                #     weight_decay_count = cfg.weight_decay_count
-                #     logging.info('learning rate decay, learning rate: %f' % (lr))
+                        # if not weight_decay_count:
+                        #     self.optim = AdamW(model.parameters(), lr=args.lr)
+                        #     lr *= cfg.lr_decay
+                        #     self.optim = Adam(lr=lr, params=filter(lambda x: x.requires_grad, self.m.parameters()),
+                        #                   weight_decay=5e-5)
+                        #     weight_decay_count = cfg.weight_decay_count
+                        #     logging.info('learning rate decay, learning rate: %f' % (lr))
 
         self.load_model()
         print('result preview...')
-        file_handler = logging.FileHandler(os.path.join(self.args.model_path, 'eval_log%s.json'%cfg.seed))
+        file_handler = logging.FileHandler(
+            os.path.join(self.args.model_path, f'eval_log{cfg.seed}.json')
+        )
         logging.getLogger('').addHandler(file_handler)
         logging.info(str(cfg))
         self.eval()
@@ -187,7 +193,7 @@ class Model(object):
                 turn_batch['bspn_gen'] = dst_outputs
                 py_prev['bspn'] = dst_outputs
 
-            result_collection.update(self.reader.inverse_transpose_batch(dial_batch))
+            result_collection |= self.reader.inverse_transpose_batch(dial_batch)
 
         results, _ = self.reader.wrap_result(result_collection)
         bleu, success, match = self.evaluator.validation_metric(results)
@@ -220,8 +226,8 @@ class Model(object):
                 turn_batch['resp_gen'] = resp_outputs
                 turn_batch['bspn_gen'] = dst_outputs
                 py_prev['bspn'] = dst_outputs
-             
-            result_collection.update(self.reader.inverse_transpose_batch(dial_batch))
+
+            result_collection |= self.reader.inverse_transpose_batch(dial_batch)
 
         results, field = self.reader.wrap_result(result_collection)
 
@@ -260,7 +266,7 @@ class Model(object):
 
     def count_params(self):
         module_parameters = filter(lambda p: p.requires_grad, self.m.parameters())
-        param_cnt = int(sum([np.prod(p.size()) for p in module_parameters]))
+        param_cnt = int(sum(np.prod(p.size()) for p in module_parameters))
 
         print('total trainable params: %d' % param_cnt)
         return param_cnt
@@ -274,7 +280,7 @@ def parse_arg_cfg(args):
             if dtype == type(None):
                 raise ValueError()
             if dtype is bool:
-                v = False if v == 'False' else True
+                v = v != 'False'
             elif dtype is list:
                 v = v.split(',')
                 if k=='cuda_device':
@@ -307,7 +313,7 @@ def main():
     args = parser.parse_args()
 
     cfg.mode = args.mode
-    if args.mode == 'test' or args.mode == 'relex':
+    if args.mode in ['test', 'relex']:
         parse_arg_cfg(args)
         cfg_load = json.loads(open(os.path.join(args.model_path, 'exp_cfg.json'), 'r').read())
         for k, v in cfg_load.items():
@@ -325,8 +331,7 @@ def main():
     else:
         parse_arg_cfg(args)
         if args.model_path=="":
-            args.model_path = 'experiments/{}_sd{}_lr{}_bs{}_sp{}_dc{}_cw{}_model_{}_noupdate{}_{}/'.format('-'.join(cfg.exp_domains), cfg.seed, args.lr, cfg.batch_size,
-                                                                                            cfg.early_stop_count, args.lr_decay, args.context_window, args.pretrained_checkpoint, args.noupdate_dst, args.fraction)
+            args.model_path = f"experiments/{'-'.join(cfg.exp_domains)}_sd{cfg.seed}_lr{args.lr}_bs{cfg.batch_size}_sp{cfg.early_stop_count}_dc{args.lr_decay}_cw{args.context_window}_model_{args.pretrained_checkpoint}_noupdate{args.noupdate_dst}_{args.fraction}/"
         if not os.path.exists(args.model_path):
             os.makedirs(args.model_path)
         cfg.result_path = os.path.join(args.model_path, 'result.csv')

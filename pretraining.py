@@ -118,8 +118,7 @@ class DatasetTrain(Dataset):
         #self.max_len = max(len(x["input_ids"]) for x in self.data) 
     def __getitem__(self, index):
         """Returns one data pair (source and target)."""
-        item = self.data[index]
-        return item
+        return self.data[index]
     def __len__(self):
         return self.dataset_len
 
@@ -198,9 +197,8 @@ def build_input_from_segments(history, reply):
     #mask_id0, eos_u, eos_r, eos_b = tokenizer.convert_tokens_to_ids(['<extra_id_0>', "<eos_u>", "<eos_r>", "<eos_b>"])
     #last one is user
     sequence = [s.split() + ["<eos_u>" if (len(history)-i) % 2 else "<eos_r>"] for i, s in enumerate(history)]
-    instance = {}
-    instance["context_words"] = list(chain(*sequence))
-    instance["response"] = reply + " <eos_r>"
+    instance = {"context_words": list(chain(*sequence))}
+    instance["response"] = f"{reply} <eos_r>"
     return instance
 
 
@@ -327,7 +325,7 @@ def train():
             # print(" ".join(corrupted_context))
             # print(" ".join(target))
             # print("")
-            
+
             # print(tokenizer.decode(batch["corrupted_context"][-1]))
             # print(tokenizer.decode(batch["target"][-1]))
             # print(tokenizer.decode(batch["response"][-1]))
@@ -382,7 +380,7 @@ def train():
             input_ids, attention_mask=masks, decoder_input_ids=target_inputs, lm_labels=target_ids
         )
         context_loss = outputs[0]
-        
+
         outputs = model(context_ids, 
                         attention_mask=context_masks,
                         decoder_input_ids=response_inputs,
@@ -405,6 +403,7 @@ def train():
             optimizer.step()
             optimizer.zero_grad()
         return loss.item()
+
     trainer = Engine(update)
 
     # Evaluation function and evaluator (evaluator output is the input of the metrics)
@@ -417,7 +416,7 @@ def train():
             outputs = model(
                 input_ids, attention_mask=masks, decoder_input_ids=target_inputs#, lm_labels=target_ids
             )
-            
+
             context_logits = outputs[0]
             outputs = model(context_ids,
                             attention_mask=context_masks,
@@ -434,6 +433,7 @@ def train():
 
             return (context_logits_flat_shifted, resp_logits_flat_shifted), (context_labels_flat_shifted, resp_labels_flat_shifted)
             #return (context_logits_flat_shifted, context_logits_flat_shifted), (context_labels_flat_shifted, context_labels_flat_shifted)
+
     evaluator = Engine(inference)
 
     # Attach evaluation to trainer: we evaluate when we start the training and at the end of each epoch
@@ -466,7 +466,12 @@ def train():
     if args.local_rank in [-1, 0]:
         pbar = ProgressBar(persist=True)
         pbar.attach(trainer, metric_names=["loss"])
-        evaluator.add_event_handler(Events.COMPLETED, lambda _: pbar.log_message("Validation: %s" % pformat(evaluator.state.metrics)))
+        evaluator.add_event_handler(
+            Events.COMPLETED,
+            lambda _: pbar.log_message(
+                f"Validation: {pformat(evaluator.state.metrics)}"
+            ),
+        )
 
         if not os.path.exists(f"pretrained_model/{args.save_name}"):
             os.makedirs(f"pretrained_model/{args.save_name}")
@@ -480,7 +485,7 @@ def train():
         checkpoint_handler = ModelCheckpoint(log_dir, 'checkpoint', save_interval=1, n_saved=3)
         trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpoint_handler, {'mymodel': getattr(model, 'module', model)})  # "getattr" takes care of distributed encapsulation
 
-        torch.save(args, log_dir + '/model_training_args.bin')
+        torch.save(args, f'{log_dir}/model_training_args.bin')
         getattr(model, 'module', model).config.to_json_file(os.path.join(log_dir, CONFIG_NAME))
         tokenizer.save_pretrained(log_dir)
 

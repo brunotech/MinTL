@@ -21,7 +21,7 @@ def get_db_values(value_set_path):
 
     for domain, slots in value_set.items():
         processed[domain] = {}
-        bspn_word.append('['+domain+']')
+        bspn_word.append(f'[{domain}]')
         for slot, values in slots.items():
             s_p = ontology.normlize_slot_names.get(slot, slot)
             if s_p in ontology.informable_slots[domain]:
@@ -97,7 +97,7 @@ def preprocess_db(db_paths):
                 dbs[domain][idx] = new_entry
         with open(db_paths[domain].replace('.json', '_processed.json'), 'w') as f:
             json.dump(dbs[domain], f, indent=2)
-        print('[%s] DB processed! '%domain)
+        print(f'[{domain}] DB processed! ')
 
 
 class DataPreprocessor(object):
@@ -105,7 +105,7 @@ class DataPreprocessor(object):
         self.nlp = spacy.load('en_core_web_sm')
         self.db = MultiWozDB(cfg.dbs)
         data_path = 'data/multi-woz/annotated_user_da_with_span_full.json'
-        archive = zipfile.ZipFile(data_path + '.zip', 'r')
+        archive = zipfile.ZipFile(f'{data_path}.zip', 'r')
         self.convlab_data = json.loads(archive.open(data_path.split('/')[-1], 'r').read().lower())
         self.delex_sg_valdict_path = 'data/multi-woz-processed/delex_single_valdict.json'
         self.delex_mt_valdict_path = 'data/multi-woz-processed/delex_multi_valdict.json'
@@ -134,15 +134,16 @@ class DataPreprocessor(object):
             for idx in range(s[3], s[4]+1):
                 u[idx] = ''
             try:
-                u[s[3]] = '[value_'+slot+']'
+                u[s[3]] = f'[value_{slot}]'
             except:
-                u[5] = '[value_'+slot+']'
+                u[5] = f'[value_{slot}]'
         u_delex = ' '.join([t for t in u if t is not ''])
         u_delex = u_delex.replace('[value_address] , [value_address] , [value_address]', '[value_address]')
         u_delex = u_delex.replace('[value_address] , [value_address]', '[value_address]')
         u_delex = u_delex.replace('[value_name] [value_name]', '[value_name]')
-        u_delex = u_delex.replace('[value_name]([value_phone] )', '[value_name] ( [value_phone] )')
-        return u_delex
+        return u_delex.replace(
+            '[value_name]([value_phone] )', '[value_name] ( [value_phone] )'
+        )
 
 
     def delex_by_valdict(self, text):
@@ -155,17 +156,17 @@ class DataPreprocessor(object):
         text = re.sub(r'([a-z]{1}[\. ]?[a-z]{1}[\. ]?\d{1,2}[, ]+\d{1}[\. ]?[a-z]{1}[\. ]?[a-z]{1}|[a-z]{2}\d{2}[a-z]{2})', '[value_postcode]', text)
 
         for value, slot in self.delex_mt_valdict.items():
-            text = text.replace(value, '[value_%s]'%slot)
+            text = text.replace(value, f'[value_{slot}]')
 
         for value, slot in self.delex_sg_valdict.items():
             tokens = text.split()
             for idx, tk in enumerate(tokens):
                 if tk == value:
-                    tokens[idx] = '[value_%s]'%slot
+                    tokens[idx] = f'[value_{slot}]'
             text = ' '.join(tokens)
 
         for ambg_ent in self.ambiguous_vals:
-            start_idx = text.find(' '+ambg_ent)   # ely is a place, but appears in words like moderately
+            start_idx = text.find(f' {ambg_ent}')
             if start_idx == -1:
                 continue
             front_words = text[:start_idx].split()
@@ -174,11 +175,11 @@ class DataPreprocessor(object):
             for fw in front_words[::-1]:
                 if fw in ['arrive', 'arrives', 'arrived', 'arriving', 'arrival', 'destination', 'there', 'reach',  'to', 'by', 'before']:
                     slot = '[value_arrive]' if ent_type=='time' else '[value_destination]'
-                    text = re.sub(' '+ambg_ent, ' '+slot, text)
+                    text = re.sub(f' {ambg_ent}', f' {slot}', text)
                 elif fw in ['leave', 'leaves', 'leaving', 'depart', 'departs', 'departing', 'departure',
                                 'from', 'after', 'pulls']:
                     slot = '[value_leave]' if ent_type=='time' else '[value_departure]'
-                    text = re.sub(' '+ambg_ent, ' '+slot, text)
+                    text = re.sub(f' {ambg_ent}', f' {slot}', text)
 
         text = text.replace('[value_car] [value_car]', '[value_car]')
         return text
@@ -197,20 +198,19 @@ class DataPreprocessor(object):
         entity_value_to_slot= {}
         ambiguous_entities = []
         for domain, db_data in self.db.dbs.items():
-            print('Processing entity values in [%s]'%domain)
+            print(f'Processing entity values in [{domain}]')
             if domain != 'taxi':
                 for db_entry in db_data:
                     for slot, value in db_entry.items():
                         if slot not in skip_entry_type[domain]:
                             if type(value) is not str:
-                                raise TypeError("value '%s' in domain '%s' should be rechecked"%(slot, domain))
-                            else:
-                                slot, value = clean_slot_values(domain, slot, value)
-                                value = ' '.join([token.text for token in self.nlp(value)]).strip()
-                                if value in entity_value_to_slot and entity_value_to_slot[value] != slot:
-                                    # print(value, ": ",entity_value_to_slot[value], slot)
-                                    ambiguous_entities.append(value)
-                                entity_value_to_slot[value] = slot
+                                raise TypeError(f"value '{slot}' in domain '{domain}' should be rechecked")
+                            slot, value = clean_slot_values(domain, slot, value)
+                            value = ' '.join([token.text for token in self.nlp(value)]).strip()
+                            if value in entity_value_to_slot and entity_value_to_slot[value] != slot:
+                                # print(value, ": ",entity_value_to_slot[value], slot)
+                                ambiguous_entities.append(value)
+                            entity_value_to_slot[value] = slot
             else:   # taxi db specific
                 db_entry = db_data[0]
                 for slot, ent_list in db_entry.items():

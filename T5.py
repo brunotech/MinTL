@@ -137,11 +137,7 @@ class MiniT5(T5ForConditionalGeneration):
             decoder_start_token_id if decoder_start_token_id is not None else self.config.decoder_start_token_id
         )
 
-        if input_ids is not None:
-            batch_size = input_ids.shape[0]  # overriden by the input batch_size
-        else:
-            batch_size = 1
-
+        batch_size = input_ids.shape[0] if input_ids is not None else 1
         assert isinstance(max_length, int) and max_length > 0, "`max_length` should be a strictly positive integer."
         assert isinstance(min_length, int) and min_length >= 0, "`min_length` should be a positive integer."
         assert isinstance(do_sample, bool), "`do_sample` should be a boolean."
@@ -182,7 +178,6 @@ class MiniT5(T5ForConditionalGeneration):
         else:
             assert input_ids.dim() == 2, "Input prompt should be of shape (batch_size, sequence length)."
 
-        # not allow to duplicate outputs when greedy decoding
         if do_sample is False:
             if num_beams == 1:
                 # no_beam_search greedy generation conditions
@@ -198,16 +193,17 @@ class MiniT5(T5ForConditionalGeneration):
 
         # create attention mask if necessary
         # TODO (PVP): this should later be handled by the forward fn() in each model in the future see PR 3140
-        if (attention_mask is None) and (pad_token_id is not None) and (pad_token_id in input_ids):
-            attention_mask = input_ids.ne(pad_token_id).long()
-        elif attention_mask is None:
-            attention_mask = input_ids.new_ones(input_ids.shape)
+        if attention_mask is None:
+            if pad_token_id is not None and pad_token_id in input_ids:
+                attention_mask = input_ids.ne(pad_token_id).long()
+            else:
+                attention_mask = input_ids.new_ones(input_ids.shape)
 
         # set pad_token_id to eos_token_id if not set. Important that this is done after
         # attention_mask is created
         if pad_token_id is None and eos_token_id is not None:
             logger.warning(
-                "Setting `pad_token_id` to {} (first `eos_token_id`) to generate sequence".format(eos_token_id)
+                f"Setting `pad_token_id` to {eos_token_id} (first `eos_token_id`) to generate sequence"
             )
             pad_token_id = eos_token_id
 
@@ -229,8 +225,10 @@ class MiniT5(T5ForConditionalGeneration):
             assert (
                 decoder_start_token_id is not None
             ), "decoder_start_token_id or bos_token_id has to be defined for encoder-decoder generation"
-            assert hasattr(self, "get_encoder"), "{} should have a 'get_encoder' function defined".format(self)
-            assert callable(self.get_encoder), "{} should be a method".format(self.get_encoder)
+            assert hasattr(
+                self, "get_encoder"
+            ), f"{self} should have a 'get_encoder' function defined"
+            assert callable(self.get_encoder), f"{self.get_encoder} should be a method"
 
             # get encoder and store encoder outputs
             encoder = self.get_encoder()
@@ -285,8 +283,8 @@ class MiniT5(T5ForConditionalGeneration):
             encoder_outputs = None
             cur_len = input_ids.shape[-1]
 
-        if num_beams > 1:
-            output = self._generate_beam_search(
+        return (
+            self._generate_beam_search(
                 input_ids,
                 cur_len=cur_len,
                 max_length=max_length,
@@ -311,8 +309,8 @@ class MiniT5(T5ForConditionalGeneration):
                 encoder_outputs=encoder_outputs,
                 attention_mask=attention_mask,
             )
-        else:
-            output = self._generate_no_beam_search(
+            if num_beams > 1
+            else self._generate_no_beam_search(
                 input_ids,
                 cur_len=cur_len,
                 max_length=max_length,
@@ -332,8 +330,7 @@ class MiniT5(T5ForConditionalGeneration):
                 encoder_outputs=encoder_outputs,
                 attention_mask=attention_mask,
             )
-
-        return output
+        )
 
     def inference(
         self,

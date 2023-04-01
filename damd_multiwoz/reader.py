@@ -112,7 +112,7 @@ class _ReaderBase(object):
         # print('dialog count: %d'%dia_count)
         # return all_batches
         random.shuffle(all_batches)
-        for i, batch in enumerate(all_batches):
+        for batch in all_batches:
             yield self.transpose_batch(batch)
 
 
@@ -127,18 +127,18 @@ class _ReaderBase(object):
 
     def save_result_report(self, results):
 
-        ctr_save_path = cfg.result_path[:-4] + '_report_ctr%s.csv'%cfg.seed
-        write_title = False if os.path.exists(ctr_save_path) else True
-        if cfg.aspn_decode_mode == 'greedy':
-            setting = ''
-        elif cfg.aspn_decode_mode == 'beam':
-            setting = 'width=%s'%str(cfg.beam_width)
+        ctr_save_path = f'{cfg.result_path[:-4]}_report_ctr{cfg.seed}.csv'
+        write_title = not os.path.exists(ctr_save_path)
+        if cfg.aspn_decode_mode == 'beam':
+            setting = f'width={str(cfg.beam_width)}'
             if cfg.beam_diverse_param>0:
-                setting += ', penalty=%s'%str(cfg.beam_diverse_param)
-        elif cfg.aspn_decode_mode == 'topk_sampling':
-            setting = 'topk=%s'%str(cfg.topk_num)
+                setting += f', penalty={str(cfg.beam_diverse_param)}'
+        elif cfg.aspn_decode_mode == 'greedy':
+            setting = ''
         elif cfg.aspn_decode_mode == 'nucleur_sampling':
-            setting = 'p=%s'%str(cfg.nucleur_p)
+            setting = f'p={str(cfg.nucleur_p)}'
+        elif cfg.aspn_decode_mode == 'topk_sampling':
+            setting = f'topk={str(cfg.topk_num)}'
         res = {'exp': cfg.eval_load_path, 'true_bspn':cfg.use_true_curr_bspn, 'true_aspn': cfg.use_true_curr_aspn,
                   'decode': cfg.aspn_decode_mode, 'param':setting, 'nbest': cfg.nbest, 'selection_sheme': cfg.act_selection_scheme,
                   'match': results[0]['match'], 'success': results[0]['success'], 'bleu': results[0]['bleu'], 'act_f1': results[0]['act_f1'],
@@ -155,7 +155,7 @@ class MultiWozReader(_ReaderBase):
         super().__init__()
         self.nlp = spacy.load('en_core_web_sm')
         self.db = MultiWozDB(cfg.dbs)
-        
+
         self.domain_files = json.loads(open(cfg.domain_file_path, 'r').read())
         self.slot_value_set = json.loads(open(cfg.slot_value_set_path, 'r').read())
         if cfg.multi_acts_training:
@@ -174,7 +174,7 @@ class MultiWozReader(_ReaderBase):
             for domain in cfg.exp_domains:
                 fn_list = self.domain_files.get(domain)
                 if not fn_list:
-                    raise ValueError('[%s] is an invalid experiment setting'%domain)
+                    raise ValueError(f'[{domain}] is an invalid experiment setting')
                 for fn in fn_list:
                     self.exp_files[fn.replace('.json', '')] = 1
 
@@ -201,17 +201,19 @@ class MultiWozReader(_ReaderBase):
         return self.vocab.vocab_size
 
     def _construct_bspn_constraint(self):
-        bspn_masks = {}
         valid_domains = ['restaurant', 'hotel', 'attraction', 'train', 'taxi', 'hospital']
-        all_dom_codes = [self.vocab.encode('['+d+']') for d in valid_domains]
+        all_dom_codes = [self.vocab.encode(f'[{d}]') for d in valid_domains]
         all_slot_codes = [self.vocab.encode(s) for s in ontology.all_slots]
-        bspn_masks[self.vocab.encode('<go_b>')] = all_dom_codes + [self.vocab.encode('<eos_b>'), 0]
+        bspn_masks = {
+            self.vocab.encode('<go_b>'): all_dom_codes
+            + [self.vocab.encode('<eos_b>'), 0]
+        }
         bspn_masks[self.vocab.encode('<eos_b>')] = [self.vocab.encode('<pad>')]
         bspn_masks[self.vocab.encode('<pad>')] = [self.vocab.encode('<pad>')]
         for domain, slot_values in self.slot_value_set.items():
             if domain == 'police':
                 continue
-            dom_code = self.vocab.encode('['+domain+']')
+            dom_code = self.vocab.encode(f'[{domain}]')
             bspn_masks[dom_code] = []
             for slot, values in slot_values.items():
                 slot_code = self.vocab.encode(slot)
@@ -244,17 +246,27 @@ class MultiWozReader(_ReaderBase):
         bspn_masks[self.vocab.encode('<unk>')] = list(bspn_masks.keys())
 
         with open('data/multi-woz-processed/bspn_masks.txt', 'w') as f:
-            for i,j in bspn_masks.items():
-                f.write(self.vocab.decode(i) + ': ' + ' '.join([self.vocab.decode(int(m)) for m in j])+'\n')
+            for i, j in bspn_masks.items():
+                f.write(
+                    f'{self.vocab.decode(i)}: '
+                    + ' '.join([self.vocab.decode(int(m)) for m in j])
+                    + '\n'
+                )
         return bspn_masks
 
     def _construct_aspn_constraint(self):
         aspn_masks = {}
-        aspn_masks = {}
-        all_dom_codes = [self.vocab.encode('['+d+']') for d in ontology.dialog_acts.keys()]
-        all_act_codes = [self.vocab.encode('['+a+']') for a in ontology.dialog_act_params]
+        all_dom_codes = [
+            self.vocab.encode(f'[{d}]') for d in ontology.dialog_acts.keys()
+        ]
+        all_act_codes = [
+            self.vocab.encode(f'[{a}]') for a in ontology.dialog_act_params
+        ]
         all_slot_codes = [self.vocab.encode(s) for s in ontology.dialog_act_all_slots]
-        aspn_masks[self.vocab.encode('<go_a>')] = all_dom_codes + [self.vocab.encode('<eos_a>'), 0]
+        aspn_masks = {
+            self.vocab.encode('<go_a>'): all_dom_codes
+            + [self.vocab.encode('<eos_a>'), 0]
+        }
         aspn_masks[self.vocab.encode('<eos_a>')] = [self.vocab.encode('<pad>')]
         aspn_masks[self.vocab.encode('<pad>')] = [self.vocab.encode('<pad>')]
         # for d in all_dom_codes:
@@ -262,10 +274,10 @@ class MultiWozReader(_ReaderBase):
         for a in all_act_codes:
             aspn_masks[a] = all_dom_codes + all_slot_codes + [self.vocab.encode('<eos_a>')]
         for domain, acts in ontology.dialog_acts.items():
-            dom_code = self.vocab.encode('['+domain+']')
+            dom_code = self.vocab.encode(f'[{domain}]')
             aspn_masks[dom_code] = []
             for a in acts:
-                act_code = self.vocab.encode('['+a+']')
+                act_code = self.vocab.encode(f'[{a}]')
                 if act_code not in aspn_masks[dom_code]:
                     aspn_masks[dom_code].append(act_code)
         # for a, slots in ontology.dialog_act_params.items():
@@ -278,8 +290,12 @@ class MultiWozReader(_ReaderBase):
 
 
         with open('data/multi-woz-processed/aspn_masks.txt', 'w') as f:
-            for i,j in aspn_masks.items():
-                f.write(self.vocab.decode(i) + ': ' + ' '.join([self.vocab.decode(int(m)) for m in j])+'\n')
+            for i, j in aspn_masks.items():
+                f.write(
+                    f'{self.vocab.decode(i)}: '
+                    + ' '.join([self.vocab.decode(int(m)) for m in j])
+                    + '\n'
+                )
         return aspn_masks
 
     def _load_data(self, save_temp=False):
@@ -311,9 +327,12 @@ class MultiWozReader(_ReaderBase):
     def _get_encoded_data(self, fn, dial):
         encoded_dial = []
         for idx, t in enumerate(dial['log']):
-            enc = {}
-            enc['dial_id'] = fn
-            enc['user'] = self.vocab.sentence_encode(t['user'].split() + ['<eos_u>'])
+            enc = {
+                'dial_id': fn,
+                'user': self.vocab.sentence_encode(
+                    t['user'].split() + ['<eos_u>']
+                ),
+            }
             enc['usdx'] = self.vocab.sentence_encode(t['user_delex'].split() + ['<eos_u>'])
             enc['resp'] = self.vocab.sentence_encode(t['resp'].split() + ['<eos_r>'])
             enc['bspn'] = self.vocab.sentence_encode(t['constraint'].split() + ['<eos_b>'])
@@ -389,8 +408,7 @@ class MultiWozReader(_ReaderBase):
         match_dom = turn_domain[0] if len(turn_domain) == 1 else turn_domain[1]
         match_dom = match_dom[1:-1] if match_dom.startswith('[') else match_dom
         match = matnums[match_dom]
-        vector = self.db.addDBPointer(match_dom, match)
-        return vector
+        return self.db.addDBPointer(match_dom, match)
 
     def aspan_to_act_list(self, aspan):
         aspan = aspan.split() if isinstance(aspan, str) else aspan
@@ -409,14 +427,14 @@ class MultiWozReader(_ReaderBase):
                     continue
                 vidx = idx+1
                 if vidx == conslen:
-                    acts.append(domain+'-'+cons[1:-1]+'-none')
+                    acts.append(f'{domain}-{cons[1:-1]}-none')
                     break
                 vt = aspan[vidx]
                 vt = self.vocab.decode(vt) if type(vt) is not str else vt
                 no_param_act = True
                 while vidx < conslen and vt != '<eos_a>' and '[' not in vt:
                     no_param_act = False
-                    acts.append(domain+'-'+cons[1:-1]+'-'+vt)
+                    acts.append(f'{domain}-{cons[1:-1]}' + '-' + vt)
                     vidx += 1
                     if vidx == conslen:
                         break
@@ -443,8 +461,8 @@ class MultiWozReader(_ReaderBase):
         if first_turn:
             for item, py_list in py_prev.items():
                 batch_size = len(py_batch['user'])
-                inputs[item+'_np'] = np.array([[1]] * batch_size)
-                inputs[item+'_unk_np'] = np.array([[1]] * batch_size)
+                inputs[f'{item}_np'] = np.array([[1]] * batch_size)
+                inputs[f'{item}_unk_np'] = np.array([[1]] * batch_size)
         else:
             for item, py_list in py_prev.items():
                 if py_list is None:
@@ -456,12 +474,12 @@ class MultiWozReader(_ReaderBase):
                 if not cfg.enable_dspn and 'dspn' in item:
                     continue
                 prev_np = utils.padSeqs(py_list, truncated=cfg.truncated, trunc_method='pre')
-                inputs[item+'_np'] = prev_np
+                inputs[f'{item}_np'] = prev_np
                 if item in ['pv_resp', 'pv_bspn']:
-                    inputs[item+'_unk_np'] = deepcopy(inputs[item+'_np'])
-                    inputs[item+'_unk_np'][inputs[item+'_unk_np']>=self.vocab_size] = 2   # <unk>
+                    inputs[f'{item}_unk_np'] = deepcopy(inputs[f'{item}_np'])
+                    inputs[f'{item}_unk_np'][inputs[f'{item}_unk_np'] >= self.vocab_size] = 2
                 else:
-                    inputs[item+'_unk_np'] = inputs[item+'_np']
+                    inputs[f'{item}_unk_np'] = inputs[f'{item}_np']
 
         for item in ['user', 'usdx', 'resp', 'bspn', 'aspn', 'bsdx', 'dspn']:
             if not cfg.enable_aspn and item == 'aspn':
@@ -474,12 +492,14 @@ class MultiWozReader(_ReaderBase):
             py_list = py_batch[item]
             trunc_method = 'post' if item == 'resp' else 'pre'
             # max_length = cfg.max_nl_length if item in ['user', 'usdx', 'resp'] else cfg.max_span_length
-            inputs[item+'_np'] = utils.padSeqs(py_list, truncated=cfg.truncated, trunc_method=trunc_method)
+            inputs[f'{item}_np'] = utils.padSeqs(
+                py_list, truncated=cfg.truncated, trunc_method=trunc_method
+            )
             if item in ['user', 'usdx', 'resp', 'bspn']:
-                inputs[item+'_unk_np'] = deepcopy(inputs[item+'_np'])
-                inputs[item+'_unk_np'][inputs[item+'_unk_np']>=self.vocab_size] = 2   # <unk>
+                inputs[f'{item}_unk_np'] = deepcopy(inputs[f'{item}_np'])
+                inputs[f'{item}_unk_np'][inputs[f'{item}_unk_np'] >= self.vocab_size] = 2
             else:
-                inputs[item+'_unk_np'] = inputs[item+'_np']
+                inputs[f'{item}_unk_np'] = inputs[f'{item}_np']
 
         if cfg.multi_acts_training and cfg.mode=='train':
             inputs['aspn_bidx'], multi_aspn = [], []
@@ -509,7 +529,7 @@ class MultiWozReader(_ReaderBase):
     def wrap_result(self, result_dict, eos_syntax=None):
         decode_fn = self.vocab.sentence_decode
         results = []
-        eos_syntax = ontology.eos_tokens if not eos_syntax else eos_syntax
+        eos_syntax = eos_syntax or ontology.eos_tokens
 
         if cfg.bspn_mode == 'bspn':
             field = ['dial_id', 'turn_num', 'user', 'bspn_gen','bspn', 'resp_gen', 'resp', 'aspn_gen', 'aspn',
@@ -555,8 +575,7 @@ class MultiWozReader(_ReaderBase):
 
         # restored.replace('[value_phone]', '830-430-6666')
         for d in domain:
-            constraint = constraint_dict.get(d,None)
-            if constraint:
+            if constraint := constraint_dict.get(d, None):
                 if 'stay' in constraint:
                     restored = restored.replace('[value_stay]', constraint['stay'])
                 if 'day' in constraint:
@@ -571,8 +590,8 @@ class MultiWozReader(_ReaderBase):
                     for s in constraint:
                         if s == 'pricerange' and d in ['hotel', 'restaurant'] and 'price]' in restored:
                             restored = restored.replace('[value_price]', constraint['pricerange'])
-                        if s+']' in restored:
-                            restored = restored.replace('[value_%s]'%s, constraint[s])
+                        if f'{s}]' in restored:
+                            restored = restored.replace(f'[value_{s}]', constraint[s])
 
             if '[value_choice' in restored and mat_ents.get(d):
                 restored = restored.replace('[value_choice]', str(len(mat_ents[d])))
@@ -580,15 +599,11 @@ class MultiWozReader(_ReaderBase):
             restored = restored.replace('[value_choice]', str(random.choice([1,2,3,4,5])))
 
         stopwords = ["i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "yours", "yourself", "yourselves", "he", "him", "his", "himself", "she", "her", "hers", "herself", "it", "its", "itself", "they", "them", "their", "theirs", "themselves", "what", "which", "who", "whom", "this", "that", "these", "those", "am", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "having", "do", "does", "did", "doing", "a", "an", "the", "and", "but", "if", "or", "because", "as", "until", "while", "of", "at", "by", "for", "with", "about", "against", "between", "into", "through", "during", "before", "after", "above", "below", "to", "from", "up", "down", "in", "out", "on", "off", "over", "under", "again", "further", "then", "once", "here", "there", "when", "where", "why", "how", "all", "any", "both", "each", "few", "more", "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "s", "t", "can", "will", "just", "don", "should", "now"]
-        # restored.replace('[value_car]', 'BMW')
-
-
-        ent = mat_ents.get(domain[-1], [])
-        if ent:
+        if ent := mat_ents.get(domain[-1], []):
             # handle multiple [value_xxx] tokens first
             restored_split = restored.split()
             token_count = Counter(restored_split)
-            for idx, t in enumerate(restored_split):
+            for t in restored_split:
                 if '[value' in t and token_count[t]>1 and token_count[t]<=len(ent):
                     slot = t[7:-1]
                     pattern = r'\['+t[1:-1]+r'\]'

@@ -49,10 +49,10 @@ def clean_text(text):
     text = re.sub(r'(\w+)\.\.? ', r'\1 . ', text)   # if 'abc. ' -> 'abc . '
 
     with open(os.path.join(os.path.dirname(__file__),'data/multi-woz/mapping.pair'), 'r') as fin:
-        for line in fin.readlines():
+        for line in fin:
             fromx, tox = line.replace('\n', '').split('\t')
-            text = ' ' + text + ' '
-            text = text.replace(' ' + fromx + ' ', ' ' + tox + ' ')[1:-1]
+            text = f' {text} '
+            text = text.replace(f' {fromx} ', f' {tox} ')[1:-1]
 
     return text
 
@@ -63,7 +63,9 @@ def clean_time(utter):
     utter = re.sub(r'(\d+) ([ap]\.?m)', lambda x: x.group(1) + x.group(2), utter)   # 9 am -> 9am
     utter = re.sub(r'((?<!\d)\d:\d+)(am)?', r'0\1', utter)
     utter = re.sub(r'((?<!\d)\d)am', r'0\1:00', utter)
-    utter = re.sub(r'((?<!\d)\d)pm', lambda x: str(int(x.group(1))+12)+':00', utter)
+    utter = re.sub(
+        r'((?<!\d)\d)pm', lambda x: f'{str(int(x.group(1)) + 12)}:00', utter
+    )
     utter = re.sub(r'(\d+)(:\d+)pm', lambda x: str(int(x.group(1))+12)+x.group(2), utter)
     utter = re.sub(r'(\d+)a\.?m',r'\1', utter)
     return utter
@@ -150,16 +152,12 @@ def clean_slot_values(domain, slot, value):
         elif slot == 'parking':
             if value == 'n':
                 value = 'no'
-            elif value in ['free parking']:
-                value = 'yes'
-            elif value in ['y']:
+            elif value in ['free parking', 'y']:
                 value = 'yes'
         elif slot in ['pricerange', 'price range']:
             slot = 'pricerange'
             if value == 'moderately':
                 value = 'moderate'
-            elif value in ['any']:
-                value = "do not care"
             elif value in ['any']:
                 value = "do not care"
             elif value in ['inexpensive']:
@@ -174,12 +172,15 @@ def clean_slot_values(domain, slot, value):
             elif value in ['4-star', '4 stars', '4 star', 'four star', 'four stars']:
                 value= '4'
         elif slot == 'type':
-            if value == '0 star rarting':
+            if value == '0 star rarting' or value not in [
+                'guesthouse',
+                'hotel',
+                'guest house',
+                "do not care",
+            ]:
                 value = ''
             elif value == 'guesthouse':
                 value = 'guest house'
-            elif value not in ['hotel', 'guest house', "do not care"]:
-                value = ''
     elif domain == 'restaurant':
         if slot == "area":
             if value in ["center", 'scentre', "center of town", "city center", "cb30aq", "town center", 'centre of cambridge', 'city centre']:
@@ -274,7 +275,7 @@ def clean_slot_values(domain, slot, value):
                 value = ''
             value = value.replace(".", ":")
         elif slot == 'day':
-            if value =='doesnt care' or value == "doesn't care":
+            if value in ['doesnt care', "doesn't care"]:
                 value = "do not care"
         elif slot in ['leaveAt', 'leave at']:
             slot = 'leaveat'

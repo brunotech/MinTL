@@ -182,7 +182,7 @@ class _ReaderBase(object):
         # print('dialog count: %d'%dia_count)
         # return all_batches
         random.shuffle(all_batches)
-        for i, batch in enumerate(all_batches):
+        for batch in all_batches:
             yield self.transpose_batch(batch)
 
 
@@ -197,18 +197,18 @@ class _ReaderBase(object):
 
     def save_result_report(self, results):
 
-        ctr_save_path = cfg.result_path[:-4] + '_report_ctr%s.csv'%cfg.seed
-        write_title = False if os.path.exists(ctr_save_path) else True
-        if cfg.aspn_decode_mode == 'greedy':
-            setting = ''
-        elif cfg.aspn_decode_mode == 'beam':
-            setting = 'width=%s'%str(cfg.beam_width)
+        ctr_save_path = f'{cfg.result_path[:-4]}_report_ctr{cfg.seed}.csv'
+        write_title = not os.path.exists(ctr_save_path)
+        if cfg.aspn_decode_mode == 'beam':
+            setting = f'width={str(cfg.beam_width)}'
             if cfg.beam_diverse_param>0:
-                setting += ', penalty=%s'%str(cfg.beam_diverse_param)
-        elif cfg.aspn_decode_mode == 'topk_sampling':
-            setting = 'topk=%s'%str(cfg.topk_num)
+                setting += f', penalty={str(cfg.beam_diverse_param)}'
+        elif cfg.aspn_decode_mode == 'greedy':
+            setting = ''
         elif cfg.aspn_decode_mode == 'nucleur_sampling':
-            setting = 'p=%s'%str(cfg.nucleur_p)
+            setting = f'p={str(cfg.nucleur_p)}'
+        elif cfg.aspn_decode_mode == 'topk_sampling':
+            setting = f'topk={str(cfg.topk_num)}'
         res = {'exp': cfg.eval_load_path, 'true_bspn':cfg.use_true_curr_bspn, 'true_aspn': cfg.use_true_curr_aspn,
                   'decode': cfg.aspn_decode_mode, 'param':setting, 'nbest': cfg.nbest, 'selection_sheme': cfg.act_selection_scheme,
                   'match': results[0]['match'], 'success': results[0]['success'], 'bleu': results[0]['bleu'], 'act_f1': results[0]['act_f1'],
@@ -269,8 +269,7 @@ class MultiWozReader(_ReaderBase):
         delete_op = self.vocab.tokenizer.encode("<None>") #delete operation
         prev_constraint_dict = {}
         for idx, t in enumerate(dial['log']):
-            enc = {}
-            enc['dial_id'] = fn
+            enc = {'dial_id': fn}
             #enc['user'] = self.vocab.tokenizer.encode(t['user']) + self.vocab.tokenizer.encode(['<eos_u>'])
             dial_context.append( self.vocab.tokenizer.encode(t['user']) + self.vocab.tokenizer.encode('<eos_u>') )
             enc['user'] = list(chain(*dial_context[-self.args.context_window:])) # here we use user to represent dialogue history
@@ -291,11 +290,11 @@ class MultiWozReader(_ReaderBase):
             if sum(enc['pointer'][:-2])==0:
                 enc['input_pointer'] = self.vocab.tokenizer.encode("[db_state0]")
             else:
-                enc['input_pointer'] = [self.vocab.tokenizer.encode("[db_state0]")[0] + enc['pointer'][:-2].index(1)+1] 
+                enc['input_pointer'] = [self.vocab.tokenizer.encode("[db_state0]")[0] + enc['pointer'][:-2].index(1)+1]
             if sum(enc['pointer'][-2:])>0:
                 enc['input_pointer'][0] += (enc['pointer'][-2:].index(1)+1) * 5 # 5 means index(db_state0+bookfail)-index(db_state0)=5
 
-                
+
             enc['turn_domain'] = t['turn_domain'].split()
             enc['turn_num'] = t['turn_num']
             encoded_dial.append(enc)
@@ -322,23 +321,19 @@ class MultiWozReader(_ReaderBase):
                         update_dict[domain][slot] = "<None>"
             else:
                 update_dict[domain] = deepcopy(constraint_dict[domain])
-    
 
-        update_bspn= self.constraint_dict_to_bspan(update_dict)
-        return update_bspn
+
+        return self.constraint_dict_to_bspan(update_dict)
 
     def constraint_dict_to_bspan(self, constraint_dict):
         if not constraint_dict:
             return "<eos_b>"
         update_bspn=""
         for domain in constraint_dict:
-            if len(update_bspn)==0: 
-                update_bspn += f"[{domain}]"
-            else:
-                update_bspn += f" [{domain}]"
+            update_bspn += f"[{domain}]" if len(update_bspn)==0 else f" [{domain}]"
             for slot in constraint_dict[domain]:
                 update_bspn += f" {slot} {constraint_dict[domain][slot]}"
-        update_bspn += f" <eos_b>"
+        update_bspn += " <eos_b>"
         return update_bspn
 
     def bspan_to_constraint_dict(self, bspan, bspn_mode = 'bspn'):
@@ -399,8 +394,7 @@ class MultiWozReader(_ReaderBase):
         match_dom = turn_domain[0] if len(turn_domain) == 1 else turn_domain[1]
         match_dom = match_dom[1:-1] if match_dom.startswith('[') else match_dom
         match = matnums[match_dom]
-        vector = self.db.addDBPointer(match_dom, match)
-        return vector
+        return self.db.addDBPointer(match_dom, match)
 
 
     def dspan_to_domain(self, dspan):
@@ -422,19 +416,19 @@ class MultiWozReader(_ReaderBase):
         output1: dialogue state update ['update_bspn'] or current dialogue state ['bspn']
         output2: dialogue response ['resp']
         """
-        inputs = {}
         pad_token = self.vocab.tokenizer.encode("<pad>")[0]
         batch_size = len(batch['user'])
         # input: previous dialogue state + dialogue history
         input_ids = []
         if first_turn:
-            for i in range(batch_size):
-                input_ids.append(self.vocab.tokenizer.encode('<eos_b>') + batch['user'][i])
+            input_ids.extend(
+                self.vocab.tokenizer.encode('<eos_b>') + batch['user'][i]
+                for i in range(batch_size)
+            )
         else:
-            for i in range(batch_size):
-                input_ids.append(prev['bspn'][i] + batch['user'][i])
+            input_ids.extend(prev['bspn'][i] + batch['user'][i] for i in range(batch_size))
         input_ids, masks = self.padInput(input_ids, pad_token)
-        inputs["input_ids"] = torch.tensor(input_ids,dtype=torch.long)
+        inputs = {"input_ids": torch.tensor(input_ids, dtype=torch.long)}
         inputs["masks"] = torch.tensor(masks,dtype=torch.long)
         if self.args.noupdate_dst:
             # here we use state_update denote the belief span (bspn)...
@@ -457,7 +451,7 @@ class MultiWozReader(_ReaderBase):
         #         print(inputs[k].tolist())
         #         print(k)
         #         print(self.vocab.tokenizer.decode(inputs[k].tolist()[0]))
-        
+
         return inputs
 
     def padOutput(self, sequences, pad_token):
@@ -490,7 +484,7 @@ class MultiWozReader(_ReaderBase):
         if not constraint_dict_update:
             return prev_bspn
         constraint_dict = self.bspan_to_constraint_dict(self.vocab.tokenizer.decode(prev_bspn) )
-        
+
         for domain in constraint_dict_update:
             if domain not in constraint_dict:
                 constraint_dict[domain] = {}
@@ -499,14 +493,15 @@ class MultiWozReader(_ReaderBase):
                     _ = constraint_dict[domain].pop(slot, None)
                 else:
                     constraint_dict[domain][slot]=value
-        updated_bspn = self.vocab.tokenizer.encode(self.constraint_dict_to_bspan(constraint_dict))
-        return updated_bspn
+        return self.vocab.tokenizer.encode(
+            self.constraint_dict_to_bspan(constraint_dict)
+        )
         
 
     def wrap_result(self, result_dict, eos_syntax=None):
         decode_fn = self.vocab.sentence_decode
         results = []
-        eos_syntax = ontology.eos_tokens if not eos_syntax else eos_syntax
+        eos_syntax = eos_syntax or ontology.eos_tokens
 
         if cfg.bspn_mode == 'bspn':
             field = ['dial_id', 'turn_num', 'user', 'bspn_gen','bspn', 'resp_gen', 'resp', 'aspn_gen', 'aspn',
@@ -617,8 +612,7 @@ class MultiWozReader(_ReaderBase):
 
         # restored.replace('[value_phone]', '830-430-6666')
         for d in domain:
-            constraint = constraint_dict.get(d,None)
-            if constraint:
+            if constraint := constraint_dict.get(d, None):
                 if 'stay' in constraint:
                     restored = restored.replace('[value_stay]', constraint['stay'])
                 if 'day' in constraint:
@@ -633,8 +627,8 @@ class MultiWozReader(_ReaderBase):
                     for s in constraint:
                         if s == 'pricerange' and d in ['hotel', 'restaurant'] and 'price]' in restored:
                             restored = restored.replace('[value_price]', constraint['pricerange'])
-                        if s+']' in restored:
-                            restored = restored.replace('[value_%s]'%s, constraint[s])
+                        if f'{s}]' in restored:
+                            restored = restored.replace(f'[value_{s}]', constraint[s])
 
             if '[value_choice' in restored and mat_ents.get(d):
                 restored = restored.replace('[value_choice]', str(len(mat_ents[d])))
@@ -645,12 +639,11 @@ class MultiWozReader(_ReaderBase):
         # restored.replace('[value_car]', 'BMW')
         stopwords = ["i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "yours", "yourself", "yourselves", "he", "him", "his", "himself", "she", "her", "hers", "herself", "it", "its", "itself", "they", "them", "their", "theirs", "themselves", "what", "which", "who", "whom", "this", "that", "these", "those", "am", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "having", "do", "does", "did", "doing", "a", "an", "the", "and", "but", "if", "or", "because", "as", "until", "while", "of", "at", "by", "for", "with", "about", "against", "between", "into", "through", "during", "before", "after", "above", "below", "to", "from", "up", "down", "in", "out", "on", "off", "over", "under", "again", "further", "then", "once", "here", "there", "when", "where", "why", "how", "all", "any", "both", "each", "few", "more", "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "s", "t", "can", "will", "just", "don", "should", "now"]
 
-        ent = mat_ents.get(domain[-1], [])
-        if ent:
+        if ent := mat_ents.get(domain[-1], []):
             # handle multiple [value_xxx] tokens first
             restored_split = restored.split()
             token_count = Counter(restored_split)
-            for idx, t in enumerate(restored_split):
+            for t in restored_split:
                 if '[value' in t and token_count[t]>1 and token_count[t]<=len(ent):
                     slot = t[7:-1]
                     pattern = r'\['+t[1:-1]+r'\]'
@@ -717,9 +710,7 @@ class MultiWozReader(_ReaderBase):
         resp_index = namelist.index("resp_gen")
         dspn_index = namelist.index("dspn_gen")
 
-        row_list = []
-        row_list.append(namelist)
-
+        row_list = [namelist]
         for row in data:
             bspn = row[bspn_index]
             resp = row[resp_index]
@@ -733,7 +724,7 @@ class MultiWozReader(_ReaderBase):
                 row[resp_index] = new_resp_gen
                 row_list.append(row)
 
-                
+
                 print("resp", resp)
                 #print("cons_dict: ", cons_dict)
                 #print("dspn: ", dspn)

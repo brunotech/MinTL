@@ -47,26 +47,30 @@ class Model(object):
                 continue
             if not cfg.enable_dspn and item == 'dspn':
                 continue
-            inputs[item] = cuda_(torch.from_numpy(inputs[item+'_unk_np']).long())
+            inputs[item] = cuda_(torch.from_numpy(inputs[f'{item}_unk_np']).long())
             if item in ['user', 'usdx', 'resp', 'bspn']:
-                inputs[item+'_nounk'] = cuda_(torch.from_numpy(inputs[item+'_np']).long())
+                inputs[f'{item}_nounk'] = cuda_(torch.from_numpy(inputs[f'{item}_np']).long())
             else:
-                inputs[item+'_nounk'] = inputs[item]
+                inputs[f'{item}_nounk'] = inputs[item]
             # print(item, inputs[item].size())
             if item in ['resp', 'bspn', 'aspn', 'bsdx', 'dspn']:
-                if 'pv_'+item+'_unk_np' not in inputs:
+                if f'pv_{item}_unk_np' not in inputs:
                     continue
-                inputs['pv_'+item] = cuda_(torch.from_numpy(inputs['pv_'+item+'_unk_np']).long())
+                inputs[f'pv_{item}'] = cuda_(
+                    torch.from_numpy(inputs[f'pv_{item}_unk_np']).long()
+                )
                 if item in ['user', 'usdx', 'bspn']:
-                    inputs['pv_'+item+'_nounk'] = cuda_(torch.from_numpy(inputs['pv_'+item+'_np']).long())
-                    inputs[item+'_4loss'] = self.index_for_loss(item, inputs)
+                    inputs[f'pv_{item}_nounk'] = cuda_(
+                        torch.from_numpy(inputs[f'pv_{item}_np']).long()
+                    )
+                    inputs[f'{item}_4loss'] = self.index_for_loss(item, inputs)
                 else:
-                    inputs['pv_'+item+'_nounk'] = inputs['pv_'+item]
-                    inputs[item+'_4loss'] = inputs[item]
-                if 'pv_' + item in need_onehot:
-                    inputs['pv_' + item + '_onehot'] = get_one_hot_input(inputs['pv_'+item+'_unk_np'])
+                    inputs[f'pv_{item}_nounk'] = inputs[f'pv_{item}']
+                    inputs[f'{item}_4loss'] = inputs[item]
+                if f'pv_{item}' in need_onehot:
+                    inputs[f'pv_{item}_onehot'] = get_one_hot_input(inputs[f'pv_{item}_unk_np'])
             if item in need_onehot:
-                inputs[item+'_onehot'] = get_one_hot_input(inputs[item+'_unk_np'])
+                inputs[f'{item}_onehot'] = get_one_hot_input(inputs[f'{item}_unk_np'])
 
         if cfg.multi_acts_training and 'aspn_aug_unk_np' in inputs:
             inputs['aspn_aug'] = cuda_(torch.from_numpy(inputs['aspn_aug_unk_np']).long())
@@ -75,23 +79,23 @@ class Model(object):
         return inputs
 
     def index_for_loss(self, item, inputs):
-        raw_labels = inputs[item+'_np']
-        if item == 'bspn':
-            copy_sources = [inputs['user_np'], inputs['pv_resp_np'], inputs['pv_bspn_np']]
-        elif item == 'bsdx':
-            copy_sources = [inputs['usdx_np'], inputs['pv_resp_np'], inputs['pv_bsdx_np']]
-        elif item == 'aspn':
+        raw_labels = inputs[f'{item}_np']
+        if item == 'aspn':
             copy_sources = []
             if cfg.use_pvaspn:
                 copy_sources.append(inputs['pv_aspn_np'])
             if cfg.enable_bspn:
-                copy_sources.append(inputs[cfg.bspn_mode+'_np'])
+                copy_sources.append(inputs[f'{cfg.bspn_mode}_np'])
+        elif item == 'bsdx':
+            copy_sources = [inputs['usdx_np'], inputs['pv_resp_np'], inputs['pv_bsdx_np']]
+        elif item == 'bspn':
+            copy_sources = [inputs['user_np'], inputs['pv_resp_np'], inputs['pv_bspn_np']]
         elif item == 'dspn':
             copy_sources = [inputs['pv_dspn_np']]
         elif item == 'resp':
             copy_sources = [inputs['usdx_np']]
             if cfg.enable_bspn:
-                copy_sources.append(inputs[cfg.bspn_mode+'_np'])
+                copy_sources.append(inputs[f'{cfg.bspn_mode}_np'])
             if cfg.enable_aspn:
                 copy_sources.append(inputs['aspn_np'])
         else:
@@ -204,7 +208,9 @@ class Model(object):
                 if not early_stop_count:
                     self.load_model()
                     print('result preview...')
-                    file_handler = logging.FileHandler(os.path.join(cfg.exp_path, 'eval_log%s.json'%cfg.seed))
+                    file_handler = logging.FileHandler(
+                        os.path.join(cfg.exp_path, f'eval_log{cfg.seed}.json')
+                    )
                     logging.getLogger('').addHandler(file_handler)
                     logging.info(str(cfg))
                     self.eval()
@@ -217,7 +223,9 @@ class Model(object):
                     logging.info('learning rate decay, learning rate: %f' % (lr))
         self.load_model()
         print('result preview...')
-        file_handler = logging.FileHandler(os.path.join(cfg.exp_path, 'eval_log%s.json'%cfg.seed))
+        file_handler = logging.FileHandler(
+            os.path.join(cfg.exp_path, f'eval_log{cfg.seed}.json')
+        )
         logging.getLogger('').addHandler(file_handler)
         logging.info(str(cfg))
         self.eval()
@@ -264,7 +272,11 @@ class Model(object):
                         turn_batch['bspn_gen'] = decoded['bspn']
                     py_prev['pv_resp'] = turn_batch['resp'] if cfg.use_true_pv_resp else decoded['resp']
                     if cfg.enable_bspn:
-                        py_prev['pv_'+cfg.bspn_mode] = turn_batch[cfg.bspn_mode] if cfg.use_true_prev_bspn else decoded[cfg.bspn_mode]
+                        py_prev[f'pv_{cfg.bspn_mode}'] = (
+                            turn_batch[cfg.bspn_mode]
+                            if cfg.use_true_prev_bspn
+                            else decoded[cfg.bspn_mode]
+                        )
                         py_prev['pv_bspn'] = turn_batch['bspn'] if cfg.use_true_prev_bspn or 'bspn' not in decoded else decoded['bspn']
                     if cfg.enable_aspn:
                         py_prev['pv_aspn'] = turn_batch['aspn'] if cfg.use_true_prev_aspn else decoded['aspn']
@@ -274,7 +286,7 @@ class Model(object):
                 torch.cuda.empty_cache()
 
             if cfg.valid_loss in ['score', 'match', 'success', 'bleu']:
-                result_collection.update(self.reader.inverse_transpose_batch(dial_batch))
+                result_collection |= self.reader.inverse_transpose_batch(dial_batch)
 
 
         if cfg.valid_loss not in ['score', 'match', 'success', 'bleu']:
@@ -335,23 +347,27 @@ class Model(object):
 
                 py_prev['pv_resp'] = turn_batch['resp'] if cfg.use_true_pv_resp else decoded['resp']
                 if cfg.enable_bspn:
-                    py_prev['pv_'+cfg.bspn_mode] = turn_batch[cfg.bspn_mode] if cfg.use_true_prev_bspn else decoded[cfg.bspn_mode]
+                    py_prev[f'pv_{cfg.bspn_mode}'] = (
+                        turn_batch[cfg.bspn_mode]
+                        if cfg.use_true_prev_bspn
+                        else decoded[cfg.bspn_mode]
+                    )
                     py_prev['pv_bspn'] = turn_batch['bspn'] if cfg.use_true_prev_bspn or 'bspn' not in decoded else decoded['bspn']
                 if cfg.enable_aspn:
                     py_prev['pv_aspn'] = turn_batch['aspn'] if cfg.use_true_prev_aspn else decoded['aspn']
                 if cfg.enable_dspn:
                     py_prev['pv_dspn'] = turn_batch['dspn'] if cfg.use_true_prev_dspn else decoded['dspn']
                 torch.cuda.empty_cache()
-                # prev_z = turn_batch['bspan']
+                        # prev_z = turn_batch['bspan']
             # print('test iter %d'%(batch_num+1))
             # print(dial_batch)
-            result_collection.update(self.reader.inverse_transpose_batch(dial_batch))
+            result_collection |= self.reader.inverse_transpose_batch(dial_batch)
 
         # self.reader.result_file.close()
         if cfg.record_mode:
             self.reader.record_utterance(result_collection)
             quit()
-        
+
         results, field = self.reader.wrap_result(result_collection)
         #print(results)
         self.reader.save_result('w', results, field)
@@ -421,7 +437,7 @@ class Model(object):
 
     def count_params(self):
         module_parameters = filter(lambda p: p.requires_grad, self.m.parameters())
-        param_cnt = int(sum([np.prod(p.size()) for p in module_parameters]))
+        param_cnt = int(sum(np.prod(p.size()) for p in module_parameters))
 
         print('total trainable params: %d' % param_cnt)
         return param_cnt
@@ -435,7 +451,7 @@ def parse_arg_cfg(args):
             if dtype == type(None):
                 raise ValueError()
             if dtype is bool:
-                v = False if v == 'False' else True
+                v = v != 'False'
             elif dtype is list:
                 v = v.split(',')
                 if k=='cuda_device':
@@ -456,7 +472,7 @@ def main():
     args = parser.parse_args()
 
     cfg.mode = args.mode
-    if args.mode == 'test' or args.mode=='adjust':
+    if args.mode in ['test', 'adjust']:
         parse_arg_cfg(args)
         cfg_load = json.loads(open(os.path.join(cfg.eval_load_path, 'config.json'), 'r').read())
         for k, v in cfg_load.items():
@@ -475,9 +491,7 @@ def main():
     else:
         parse_arg_cfg(args)
         if cfg.exp_path in ['' , 'to be generated']:
-            cfg.exp_path = 'experiments/{}_{}_sd{}_lr{}_bs{}_sp{}_dc{}_act{}_0.05/'.format('-'.join(cfg.exp_domains),
-                                                                                            cfg.exp_no, cfg.seed, cfg.lr, cfg.batch_size,
-                                                                                            cfg.early_stop_count, cfg.weight_decay_count, cfg.enable_aspn)
+            cfg.exp_path = f"experiments/{'-'.join(cfg.exp_domains)}_{cfg.exp_no}_sd{cfg.seed}_lr{cfg.lr}_bs{cfg.batch_size}_sp{cfg.early_stop_count}_dc{cfg.weight_decay_count}_act{cfg.enable_aspn}_0.05/"
             if cfg.save_log:
                 os.mkdir(cfg.exp_path)
             cfg.model_path = os.path.join(cfg.exp_path, 'model.pkl')
@@ -487,14 +501,9 @@ def main():
 
     cfg._init_logging_handler(args.mode)
     if cfg.cuda:
-        if len(cfg.cuda_device)==1:
-            cfg.multi_gpu = False
-            torch.cuda.set_device(cfg.cuda_device[0])
-        else:
-            # cfg.batch_size *= len(cfg.cuda_device)
-            cfg.multi_gpu = True
-            torch.cuda.set_device(cfg.cuda_device[0])
-        logging.info('Device: {}'.format(torch.cuda.current_device()))
+        cfg.multi_gpu = len(cfg.cuda_device) != 1
+        torch.cuda.set_device(cfg.cuda_device[0])
+        logging.info(f'Device: {torch.cuda.current_device()}')
 
 
     torch.manual_seed(cfg.seed)

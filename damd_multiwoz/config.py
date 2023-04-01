@@ -99,10 +99,7 @@ class _Config:
         self.record_mode = False
 
     def __str__(self):
-        s = ''
-        for k,v in self.__dict__.items():
-            s += '{} : {}\n'.format(k,v)
-        return s
+        return ''.join(f'{k} : {v}\n' for k, v in self.__dict__.items())
 
 
     def _init_logging_handler(self, mode):
@@ -110,7 +107,9 @@ class _Config:
         if not os.path.exists('./log'):
             os.mkdir('./log')
         if self.save_log and self.mode == 'train':
-            file_handler = logging.FileHandler('./log/log_{}_{}_{}_{}_sd{}.txt'.format(self.log_time, mode, '-'.join(self.exp_domains), self.exp_no, self.seed))
+            file_handler = logging.FileHandler(
+                f"./log/log_{self.log_time}_{mode}_{'-'.join(self.exp_domains)}_{self.exp_no}_sd{self.seed}.txt"
+            )
             logging.basicConfig(handlers=[stderr_handler, file_handler])
         elif self.mode == 'test':
             eval_log_path = os.path.join(self.eval_load_path, 'eval_log.json')

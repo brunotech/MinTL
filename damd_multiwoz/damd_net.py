@@ -18,8 +18,9 @@ def cuda_(var):
 
 def init_gru(gru):
     def weight_reset(m):
-        if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+        if isinstance(m, (nn.Conv2d, nn.Linear)):
             m.reset_parameters()
+
     gru.apply(weight_reset)
     # gru.reset_parameters()
     for _, hh, _, _ in gru.all_weights:
@@ -85,17 +86,11 @@ class Attn(nn.Module):
         :param encoder_outputs: tensor of size [B,T, H]
         """
         attn_energies = self.score(hidden, encoder_outputs)   # [B,T,H]
-        if mask is None:
-            normalized_energy = F.softmax(attn_energies, dim=2)  # [B,1,T]
-        else:
+        if mask is not None:
             # mask = (inp_seqs > 0).float()
             attn_energies.masked_fill_(mask, -1e20)
-            # print('masked attn:', attn_energies[0:2,:,:])
-            normalized_energy = F.softmax(attn_energies, dim=2)  # [B,1,T]
-            # print('masked normalized attn:', normalized_energy[0:2,:,:])
-
-        context = torch.bmm(normalized_energy, encoder_outputs)  # [B,1,H]
-        return context  # [B,1, H]
+        normalized_energy = F.softmax(attn_energies, dim=2)  # [B,1,T]
+        return torch.bmm(normalized_energy, encoder_outputs)
 
     def score(self, hidden, encoder_outputs):
         max_len = encoder_outputs.size(1)
@@ -143,16 +138,16 @@ class MultiLayerGRUwithLN(nn.Module):
                 gru = nn.GRU(self.input_size, self.hidden_size, num_layers=1, dropout=self.dropout,
                                                   bidirectional=self.bidirec, batch_first=True)
             else:
-                input_size = self.hidden_size if not self.bidirec else 2 * self.hidden_size
+                input_size = 2 * self.hidden_size if self.bidirec else self.hidden_size
                 gru = nn.GRU(input_size, self.hidden_size, num_layers=1, dropout=self.dropout,
                                         bidirectional=self.bidirec, batch_first=True)
-            self.model_layers['gru_'+str(l)] = gru
+            self.model_layers[f'gru_{str(l)}'] = gru
             self.all_weights.extend(gru.all_weights)
             if self.layer_norm:
-                output_size = self.hidden_size if not self.bidirec else 2 * self.hidden_size
+                output_size = 2 * self.hidden_size if self.bidirec else self.hidden_size
                 # ln = LayerNormalization(output_size)
                 ln = nn.LayerNorm(output_size)
-                self.model_layers['ln_'+str(l)] = ln
+                self.model_layers[f'ln_{str(l)}'] = ln
 
     def forward(self, inputs, hidden=None):
         """[summary]
@@ -169,10 +164,10 @@ class MultiLayerGRUwithLN(nn.Module):
             hiddens = hidden.view(self.layer_num, self.bidirec, batch_size, self.hidden_size)
         for l in range(self.layer_num):
             init_hs = hiddens[l] if hidden else None
-            in_l, hs_l = self.model_layers['gru_'+str(l)](in_l, init_hs)
+            in_l, hs_l = self.model_layers[f'gru_{str(l)}'](in_l, init_hs)
             hs.append(hs_l)
             if self.layer_norm:
-                in_l = self.model_layers['ln_'+str(l)](in_l)
+                in_l = self.model_layers[f'ln_{str(l)}'](in_l)
             if self.dropout>0 and l < (self.layer_num - 1):
                 in_l = F.dropout(in_l)
             if self.skip_connect and last_input is not None:
@@ -350,7 +345,7 @@ class DomainSpanDecoder(nn.Module):
                                      dropout=cfg.dropout, batch_first=True)
         init_gru(self.gru)
 
-        self.Wgen = nn.Linear(cfg.hidden_size, cfg.vocab_size) if not Wgen else Wgen
+        self.Wgen = Wgen or nn.Linear(cfg.hidden_size, cfg.vocab_size)
 
         self.attn_user = Attn(cfg.hidden_size)
         self.attn_pvresp = self.attn_user if cfg.attn_param_share else Attn(cfg.hidden_size)
@@ -359,10 +354,8 @@ class DomainSpanDecoder(nn.Module):
         self.cp_pvdspn = Copy(cfg.hidden_size)
 
     def forward(self, inputs, hidden_states, dec_last_w, dec_last_h, first_turn, first_step, mode='train'):
-        gru_input = []
         embed_last_w = self.embedding(dec_last_w)
-        # embed_last_w = self.dropout_layer(embed_last_w)
-        gru_input.append(embed_last_w)
+        gru_input = [embed_last_w]
         # print(embed_last_w.size())
 
         if first_step:
@@ -386,8 +379,7 @@ class DomainSpanDecoder(nn.Module):
             batch_size = inputs['user'].size(0)
             context_pvresp = cuda_(torch.zeros(batch_size, 1, cfg.hidden_size))#.to(context_user.device)
             context_pvdspn = cuda_(torch.zeros(batch_size, 1, cfg.hidden_size))#.to(context_user.device)
-        gru_input.append(context_pvresp)
-        gru_input.append(context_pvdspn)
+        gru_input.extend((context_pvresp, context_pvdspn))
         # print(context_pvbspn.size())
 
         #self.gru.flatten_parameters()
@@ -411,9 +403,9 @@ class DomainSpanDecoder(nn.Module):
             word_onehot_input.append(inputs['pv_dspn_onehot'])
             input_idx_oov.append(inputs['pv_dspn_nounk'])
 
-        probs = get_final_scores(raw_scores, word_onehot_input, input_idx_oov, self.vsize_oov)
-
-        return probs
+        return get_final_scores(
+            raw_scores, word_onehot_input, input_idx_oov, self.vsize_oov
+        )
 
 class BeliefSpanDecoder(nn.Module):
     def __init__(self, embedding, vocab_size_oov, bspn_mode, Wgen=None, dropout=0.):
@@ -428,7 +420,7 @@ class BeliefSpanDecoder(nn.Module):
                                      dropout=cfg.dropout, batch_first=True)
         init_gru(self.gru)
 
-        self.Wgen = nn.Linear(cfg.hidden_size, cfg.vocab_size) if not Wgen else Wgen
+        self.Wgen = Wgen or nn.Linear(cfg.hidden_size, cfg.vocab_size)
 
         self.attn_user = Attn(cfg.hidden_size)
         self.attn_pvresp = self.attn_user if cfg.attn_param_share else Attn(cfg.hidden_size)
@@ -458,20 +450,18 @@ class BeliefSpanDecoder(nn.Module):
         :returns: [description]
         """
 
-        gru_input = []
         embed_last_w = self.embedding(dec_last_w)
-        # embed_last_w = self.dropout_layer(embed_last_w)
-        gru_input.append(embed_last_w)
+        gru_input = [embed_last_w]
         # print(embed_last_w.size())
 
         if first_step:
             self.mask_user = (inputs['user']==0).unsqueeze(1)#.to(dec_last_w.device)     # [B,1,T]
             self.mask_pvresp = (inputs['pv_resp']==0).unsqueeze(1)#.to(dec_last_w.device)     # [B,1,T]
-            self.mask_pvbspn = (inputs['pv_'+self.bspn_mode]==0).unsqueeze(1)#.to(dec_last_w.device)     # [B,1,T]
-            # print('masks:', self.mask_user.device, self.mask_pvresp.device, self.mask_pvbspn.device)
+            self.mask_pvbspn = (inputs[f'pv_{self.bspn_mode}'] == 0).unsqueeze(1)
+                # print('masks:', self.mask_user.device, self.mask_pvresp.device, self.mask_pvbspn.device)
         if mode == 'test' and not first_step:
             self.mask_pvresp = (inputs['pv_resp']==0).unsqueeze(1)#.to(dec_last_w.device)     # [B,1,T]
-            self.mask_pvbspn = (inputs['pv_'+self.bspn_mode]==0).unsqueeze(1)#.to(dec_last_w.device)     # [B,1,T]
+            self.mask_pvbspn = (inputs[f'pv_{self.bspn_mode}'] == 0).unsqueeze(1)
 
         # print('user:', inputs['user'][0:2, :])
         context_user = self.attn_user(dec_last_h, hidden_states['user'], self.mask_user)
@@ -488,8 +478,7 @@ class BeliefSpanDecoder(nn.Module):
             batch_size = inputs['user'].size(0)
             context_pvresp = cuda_(torch.zeros(batch_size, 1, cfg.hidden_size))#.to(context_user.device)
             context_pvbspn = cuda_(torch.zeros(batch_size, 1, cfg.hidden_size))#.to(context_user.device)
-        gru_input.append(context_pvresp)
-        gru_input.append(context_pvbspn)
+        gru_input.extend((context_pvresp, context_pvbspn))
         # print(context_pvbspn.size())
 
         #self.gru.flatten_parameters()
@@ -522,13 +511,12 @@ class BeliefSpanDecoder(nn.Module):
             raw_cp_score_pvbspn = self.cp_pvbspn(hidden_states[self.bspn_mode], dec_hs)   #[B, Tdec, Tb]
             raw_cp_score_pvbspn.masked_fill_(self.mask_pvbspn.repeat(1,Tdec,1), -1e20)
             raw_scores.append(raw_cp_score_pvbspn)
-            word_onehot_input.append(inputs['pv_%s_onehot'%self.bspn_mode])
-            input_idx_oov.append(inputs['pv_%s_nounk'%self.bspn_mode])
+            word_onehot_input.append(inputs[f'pv_{self.bspn_mode}_onehot'])
+            input_idx_oov.append(inputs[f'pv_{self.bspn_mode}_nounk'])
 
-        # print('bspn:' , inputs['bspn'][0, 0:10])
-        probs = get_final_scores(raw_scores, word_onehot_input, input_idx_oov, self.vsize_oov)   # [B, V_oov]
-
-        return probs
+        return get_final_scores(
+            raw_scores, word_onehot_input, input_idx_oov, self.vsize_oov
+        )
 
 
 
@@ -551,7 +539,7 @@ class ActSpanDecoder(nn.Module):
                                     dropout=cfg.dropout, batch_first=True)
         init_gru(self.gru)
 
-        self.Wgen = nn.Linear(cfg.hidden_size, cfg.vocab_size) if not Wgen else Wgen
+        self.Wgen = Wgen or nn.Linear(cfg.hidden_size, cfg.vocab_size)
 
         self.attn_usdx = Attn(cfg.hidden_size)
         if cfg.enable_bspn:
@@ -574,13 +562,8 @@ class ActSpanDecoder(nn.Module):
 
 
     def forward(self, inputs, hidden_states, dec_last_w, dec_last_h, first_turn, first_step, bidx = None, mode='train'):
-    # def forward(self, inputs, husdx, hbspn, haspn, dec_last_w, dec_last_h, first_turn, first_step):
-
-        gru_input = []
         embed_last_w = self.embedding(dec_last_w)
-        # embed_last_w = self.dropout_layer(embed_last_w)
-        gru_input.append(embed_last_w)
-
+        gru_input = [embed_last_w]
         if first_step:
             self.mask_usdx = (inputs['usdx']==0).unsqueeze(1)#.to(dec_last_w.device)     # [B,1,T]
             self.mask_pvaspn = (inputs['pv_aspn']==0).unsqueeze(1)#.to(dec_last_w.device)     # [B,1,T]
@@ -615,16 +598,22 @@ class ActSpanDecoder(nn.Module):
             gru_input.append(context_dspn)
         if cfg.use_pvaspn:
             if not first_turn:
-                if bidx is None:
-                    context_pvaspn = self.attn_pvaspn(dec_last_h, hidden_states['aspn'], self.mask_pvaspn)
-                else:
-                    context_pvaspn = self.attn_pvaspn(dec_last_h, hidden_states['aspn'][bidx], self.mask_pvaspn[bidx])
-                # context_pvaspn = self.attn_pvaspn(dec_last_h, haspn, self.mask_pvaspn)
+                context_pvaspn = (
+                    self.attn_pvaspn(
+                        dec_last_h, hidden_states['aspn'], self.mask_pvaspn
+                    )
+                    if bidx is None
+                    else self.attn_pvaspn(
+                        dec_last_h,
+                        hidden_states['aspn'][bidx],
+                        self.mask_pvaspn[bidx],
+                    )
+                )
+                        # context_pvaspn = self.attn_pvaspn(dec_last_h, haspn, self.mask_pvaspn)
+            elif bidx is None:
+                context_pvaspn = cuda_(torch.zeros(inputs['user'].size(0), 1, cfg.hidden_size))
             else:
-                if bidx is None:
-                    context_pvaspn = cuda_(torch.zeros(inputs['user'].size(0), 1, cfg.hidden_size))
-                else:
-                    context_pvaspn = cuda_(torch.zeros(1, 1, cfg.hidden_size))
+                context_pvaspn = cuda_(torch.zeros(1, 1, cfg.hidden_size))
             gru_input.append(context_pvaspn)
 
         if bidx is None:
@@ -651,23 +640,19 @@ class ActSpanDecoder(nn.Module):
         raw_scores, word_onehot_input, input_idx_oov = [], [], []
         raw_gen_score = self.Wgen(dec_hs)    #[B, Tdec, H]
         raw_scores.append(raw_gen_score)
-        # print('raw_gen_score:' , raw_gen_score.cpu().detach().numpy()[0,:3, 0:40])
-
         if cfg.enable_bspn:
             if bidx is None:
                 raw_cp_score_bspn = self.cp_bspn(hidden_states[cfg.bspn_mode], dec_hs)   #[B,Tb]
                 raw_cp_score_bspn.masked_fill_(self.mask_bspn.repeat(1,Tdec,1), -1e20)
                 raw_scores.append(raw_cp_score_bspn)
-                word_onehot_input.append(inputs[cfg.bspn_mode + '_onehot'])
-                input_idx_oov.append(inputs[cfg.bspn_mode + '_nounk'])
+                word_onehot_input.append(inputs[f'{cfg.bspn_mode}_onehot'])
+                input_idx_oov.append(inputs[f'{cfg.bspn_mode}_nounk'])
             else:
                 raw_cp_score_bspn = self.cp_bspn(hidden_states[cfg.bspn_mode][bidx], dec_hs)   #[B,Tb]
                 raw_cp_score_bspn.masked_fill_(self.mask_bspn[bidx].repeat(1,Tdec,1), -1e20)
                 raw_scores.append(raw_cp_score_bspn)
-                word_onehot_input.append(inputs[cfg.bspn_mode + '_onehot'][bidx])
-                input_idx_oov.append(inputs[cfg.bspn_mode + '_nounk'][bidx])
-            # print('raw_cp_score_bspn:' , raw_cp_score_bspn.cpu().detach().numpy()[0,:3, 0:40])
-
+                word_onehot_input.append(inputs[f'{cfg.bspn_mode}_onehot'][bidx])
+                input_idx_oov.append(inputs[f'{cfg.bspn_mode}_nounk'][bidx])
         if cfg.enable_dspn:
             if bidx is None:
                 raw_cp_score_dspn = self.cp_dspn(hidden_states['dspn'], dec_hs)   #[B,Tb]
@@ -697,10 +682,9 @@ class ActSpanDecoder(nn.Module):
                 input_idx_oov.append(inputs['pv_aspn_nounk'][bidx])
             # print('raw_cp_score_aspn:' , raw_cp_score_aspn.cpu().detach().numpy()[0,:3, 0:40])
 
-        # print('aspn:' , inputs['aspn'][0, 0:3])
-        probs = get_final_scores(raw_scores, word_onehot_input, input_idx_oov, self.vsize_oov)
-
-        return probs
+        return get_final_scores(
+            raw_scores, word_onehot_input, input_idx_oov, self.vsize_oov
+        )
 
 
 
@@ -721,7 +705,7 @@ class ResponseDecoder(nn.Module):
                                         dropout=cfg.dropout, batch_first=True)
         init_gru(self.gru)
 
-        self.Wgen = nn.Linear(cfg.hidden_size, cfg.vocab_size) if not Wgen else Wgen
+        self.Wgen = Wgen or nn.Linear(cfg.hidden_size, cfg.vocab_size)
         self.attn_usdx = Attn(cfg.hidden_size)
         if cfg.enable_bspn:
             self.attn_bspn = self.attn_usdx if cfg.attn_param_share else Attn(cfg.hidden_size)
@@ -744,13 +728,8 @@ class ResponseDecoder(nn.Module):
 
 
     def forward(self, inputs, hidden_states, dec_last_w, dec_last_h, first_turn, first_step, mode='train'):
-    # def forward(self, inputs, husdx, hbspn, haspn, dec_last_w, dec_last_h, first_turn, first_step):
-
-        gru_input = []
         embed_last_w = self.embedding(dec_last_w)
-        # embed_last_w = self.dropout_layer(embed_last_w)
-        gru_input.append(embed_last_w)
-
+        gru_input = [embed_last_w]
         if first_step:
             self.mask_usdx = (inputs['usdx']==0).unsqueeze(1)#.to(dec_last_w.device)     # [B,1,T]
             if cfg.enable_bspn:
@@ -808,9 +787,9 @@ class ResponseDecoder(nn.Module):
             raw_cp_score_bspn = self.cp_bspn(hidden_states[cfg.bspn_mode], dec_hs)   #[B,Tb]
             raw_cp_score_bspn.masked_fill_(self.mask_bspn.repeat(1,Tdec,1), -1e20)
             raw_scores.append(raw_cp_score_bspn)
-            word_onehot_input.append(inputs[cfg.bspn_mode + '_onehot'])
-            input_idx_oov.append(inputs[cfg.bspn_mode + '_nounk'])
-            # print('raw_cp_score_bspn:' , raw_cp_score_bspn.cpu().detach().numpy()[0,:3, 0:40])
+            word_onehot_input.append(inputs[f'{cfg.bspn_mode}_onehot'])
+            input_idx_oov.append(inputs[f'{cfg.bspn_mode}_nounk'])
+                # print('raw_cp_score_bspn:' , raw_cp_score_bspn.cpu().detach().numpy()[0,:3, 0:40])
 
         if cfg.enable_aspn:
             raw_cp_score_aspn = self.cp_aspn(hidden_states['aspn'], dec_hs)   #[B,Ta]
@@ -819,10 +798,9 @@ class ResponseDecoder(nn.Module):
             word_onehot_input.append(inputs['aspn_onehot'])
             input_idx_oov.append(inputs['aspn_nounk'])
 
-        # print('resp:' , inputs['resp'][0, 0:3])
-        probs = get_final_scores(raw_scores, word_onehot_input, input_idx_oov, self.vsize_oov)
-
-        return probs
+        return get_final_scores(
+            raw_scores, word_onehot_input, input_idx_oov, self.vsize_oov
+        )
 
 
 class ActSelectionModel(nn.Module):
@@ -843,8 +821,7 @@ class ActSelectionModel(nn.Module):
         batch_size = hiddens_batch.size()[0]
         logits = hiddens_batch.view(batch_size, self.nbest, -1)
         logits = self.W2(nn.ReLU(self.W1(logits))).view(batch_size)
-        logprob = self.logsoftmax(logits)   #[B,nbest]
-        return logprob
+        return self.logsoftmax(logits)
 
 class DAMD(nn.Module):
     def __init__(self, reader):
